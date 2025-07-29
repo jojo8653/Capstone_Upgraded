@@ -5,8 +5,16 @@ from datetime import datetime, timedelta
 import warnings
 import base64
 import os
-from hotel_ml_availability import HotelAvailabilityPredictor
 warnings.filterwarnings('ignore')
+
+# Try to import ML predictor - make it optional for cloud deployment
+try:
+    from hotel_ml_availability import HotelAvailabilityPredictor
+    ML_AVAILABLE = True
+except ImportError as e:
+    st.warning("⚠️ ML components not available. Running in basic mode. Install requirements_ml.txt for full ML features.")
+    ML_AVAILABLE = False
+    HotelAvailabilityPredictor = None
 
 # Core configuration
 CONFIG = {
@@ -116,7 +124,7 @@ LARGE_COUNTRIES = {
 
 def load_logo():
     """Load logo image if available"""
-    logo_path = "hoteloptix_logo.png"  # Your logo file name
+    logo_path = "Logo1.png"  # Your logo file name
     if os.path.exists(logo_path):
         with open(logo_path, "rb") as f:
             logo_data = base64.b64encode(f.read()).decode()
@@ -645,16 +653,19 @@ def main():
         if df.empty:
             st.stop()
     
-    # Initialize ML predictor
+    # Initialize ML predictor (only if available)
     if 'ml_predictor' not in st.session_state:
-        st.session_state.ml_predictor = HotelAvailabilityPredictor()
-        # Try to load pre-trained models
-        try:
-            st.session_state.ml_predictor.load_models()
-            if st.session_state.ml_predictor.rf_model is not None:
-                st.success("✅ Pre-trained ML models loaded successfully!")
-        except:
-            pass
+        if ML_AVAILABLE:
+            st.session_state.ml_predictor = HotelAvailabilityPredictor()
+            # Try to load pre-trained models
+            try:
+                st.session_state.ml_predictor.load_models()
+                if st.session_state.ml_predictor.rf_model is not None:
+                    st.success("✅ Pre-trained ML models loaded successfully!")
+            except:
+                pass
+        else:
+            st.session_state.ml_predictor = None
     
     # Sidebar for disaster simulation
     st.sidebar.header("🚨 Disaster Scenario Setup")
@@ -700,14 +711,23 @@ def main():
     # Simulate disaster impact based on user inputs
     df = simulate_disaster_impact(df, affected_location, disaster_type, severity)
     
-    # Main tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Dashboard Overview", 
-        "🏨 Emergency Rebooking", 
-        "👷 Worker Relocation",
-        "📈 Analytics",
-        "🤖 ML Models"
-    ])
+    # Main tabs (conditionally include ML tab)
+    if ML_AVAILABLE:
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📊 Dashboard Overview", 
+            "🏨 Emergency Rebooking", 
+            "👷 Worker Relocation",
+            "📈 Analytics",
+            "🤖 ML Models"
+        ])
+    else:
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📊 Dashboard Overview", 
+            "🏨 Emergency Rebooking", 
+            "👷 Worker Relocation",
+            "📈 Analytics"
+        ])
+        tab5 = None
     
     with tab1:
         st.header("Disaster Response Dashboard Overview")
@@ -806,6 +826,10 @@ def main():
                 if len(alternatives) == 0:
                     st.warning("No suitable alternatives found for the given criteria.")
                 else:
+                    # Show ML status
+                    if not ML_AVAILABLE:
+                        st.info("ℹ️ Running in **Basic Mode** - using traditional algorithms. For ML-powered predictions, install `requirements_ml.txt` locally.")
+                    
                     for idx, hotel in alternatives.iterrows():
                         # Create header with ML confidence indicator
                         confidence_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴", "traditional": "⚪"}
@@ -825,14 +849,20 @@ def main():
                             
                             with col_d:
                                 confidence = hotel.get('ml_confidence', 'traditional')
-                                st.metric("ML Confidence", confidence.title())
+                                if confidence == 'traditional':
+                                    st.metric("Method", "Traditional")
+                                else:
+                                    st.metric("ML Confidence", confidence.title())
                             
                             # Show ML model predictions if available
-                            if hotel.get('model_predictions') and hotel['model_predictions'] != 'None':
+                            if hotel.get('model_predictions') and hotel['model_predictions'] != 'None' and ML_AVAILABLE:
                                 st.info(f"🤖 **ML Predictions**: {hotel['model_predictions']}")
                             
                             if st.button(f"📞 Contact Hotel {hotel['hotel']}", key=f"contact_{idx}"):
                                 st.success(f"Emergency booking request sent to {hotel['hotel']} in {hotel['country_name']}")
+            
+            else:
+                st.info("Configure guest requirements and click 'Find Emergency Alternatives' to search for available accommodations.")
     
     with tab3:
         st.header("👷 Service Worker Relocation")
@@ -969,138 +999,139 @@ def main():
         *This tool provides data-driven insights for hotel emergency response planning with real-time scenario modeling.*
         """)
     
-    with tab5:
-        st.header("🤖 Machine Learning Models")
-        
-        ml_predictor = st.session_state.ml_predictor
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col2:
-            st.subheader("Model Management")
+    if tab5:  # Only show ML tab if ML is available
+        with tab5:
+            st.header("🤖 Machine Learning Models")
             
-            # Model training section
-            st.markdown("### Train New Models")
-            if st.button("🚀 Train ML Models", type="primary"):
-                with st.spinner("Training machine learning models... This may take several minutes."):
+            ml_predictor = st.session_state.ml_predictor
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col2:
+                st.subheader("Model Management")
+                
+                # Model training section
+                st.markdown("### Train New Models")
+                if st.button("🚀 Train ML Models", type="primary"):
+                    with st.spinner("Training machine learning models... This may take several minutes."):
+                        try:
+                            results = ml_predictor.train_models(df)
+                            st.session_state['training_results'] = results
+                            
+                            # Save models after training
+                            ml_predictor.save_models()
+                            st.success("✅ Models trained and saved successfully!")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Training failed: {str(e)}")
+                
+                # Model status
+                st.markdown("### Model Status")
+                models_status = {
+                    "Random Forest": "✅ Loaded" if ml_predictor.rf_model is not None else "❌ Not Available",
+                    "LightGBM": "✅ Loaded" if ml_predictor.lightgbm_model is not None else "❌ Not Available", 
+                    "LSTM": "✅ Loaded" if ml_predictor.lstm_model is not None else "❌ Not Available"
+                }
+                
+                for model, status in models_status.items():
+                    st.write(f"**{model}**: {status}")
+                
+                # Load existing models
+                if st.button("📂 Load Pre-trained Models"):
                     try:
-                        results = ml_predictor.train_models(df)
-                        st.session_state['training_results'] = results
-                        
-                        # Save models after training
-                        ml_predictor.save_models()
-                        st.success("✅ Models trained and saved successfully!")
-                        
+                        ml_predictor.load_models()
+                        st.success("✅ Models loaded successfully!")
+                        st.experimental_rerun()
                     except Exception as e:
-                        st.error(f"❌ Training failed: {str(e)}")
+                        st.error(f"❌ Loading failed: {str(e)}")
             
-            # Model status
-            st.markdown("### Model Status")
-            models_status = {
-                "Random Forest": "✅ Loaded" if ml_predictor.rf_model is not None else "❌ Not Available",
-                "LightGBM": "✅ Loaded" if ml_predictor.lightgbm_model is not None else "❌ Not Available", 
-                "LSTM": "✅ Loaded" if ml_predictor.lstm_model is not None else "❌ Not Available"
-            }
-            
-            for model, status in models_status.items():
-                st.write(f"**{model}**: {status}")
-            
-            # Load existing models
-            if st.button("📂 Load Pre-trained Models"):
-                try:
-                    ml_predictor.load_models()
-                    st.success("✅ Models loaded successfully!")
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"❌ Loading failed: {str(e)}")
-        
-        with col1:
-            st.subheader("Model Performance")
-            
-            # Show training results if available
-            if 'training_results' in st.session_state:
-                results = st.session_state['training_results']
+            with col1:
+                st.subheader("Model Performance")
                 
-                st.markdown("### Model Evaluation Metrics")
-                
-                # Create performance comparison table
-                if results:
-                    performance_df = pd.DataFrame(results).T
-                    st.dataframe(performance_df, use_container_width=True)
+                # Show training results if available
+                if 'training_results' in st.session_state:
+                    results = st.session_state['training_results']
                     
-                    # Best model selection
-                    if len(performance_df) > 0:
-                        best_model = performance_df['R²'].idxmax()
-                        st.success(f"🏆 **Best performing model**: {best_model} (R² = {performance_df.loc[best_model, 'R²']:.3f})")
-            
-            # Feature importance
-            st.markdown("### Feature Importance")
-            
-            if ml_predictor.rf_model is not None or ml_predictor.lightgbm_model is not None:
-                importance_data = ml_predictor.get_feature_importance()
+                    st.markdown("### Model Evaluation Metrics")
+                    
+                    # Create performance comparison table
+                    if results:
+                        performance_df = pd.DataFrame(results).T
+                        st.dataframe(performance_df, use_container_width=True)
+                        
+                        # Best model selection
+                        if len(performance_df) > 0:
+                            best_model = performance_df['R²'].idxmax()
+                            st.success(f"🏆 **Best performing model**: {best_model} (R² = {performance_df.loc[best_model, 'R²']:.3f})")
                 
-                if importance_data:
-                    for model_name, importances in importance_data.items():
-                        st.markdown(f"#### {model_name}")
-                        
-                        # Convert to DataFrame and sort
-                        importance_df = pd.DataFrame(
-                            list(importances.items()), 
-                            columns=['Feature', 'Importance']
-                        ).sort_values('Importance', ascending=False).head(10)
-                        
-                        st.bar_chart(importance_df.set_index('Feature'))
-            else:
-                st.info("Train models to see feature importance analysis.")
-        
-        # Model explanation
-        st.markdown("---")
-        st.subheader("🔍 How the ML Models Work")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
+                # Feature importance
+                st.markdown("### Feature Importance")
+                
+                if ml_predictor.rf_model is not None or ml_predictor.lightgbm_model is not None:
+                    importance_data = ml_predictor.get_feature_importance()
+                    
+                    if importance_data:
+                        for model_name, importances in importance_data.items():
+                            st.markdown(f"#### {model_name}")
+                            
+                            # Convert to DataFrame and sort
+                            importance_df = pd.DataFrame(
+                                list(importances.items()), 
+                                columns=['Feature', 'Importance']
+                            ).sort_values('Importance', ascending=False).head(10)
+                            
+                            st.bar_chart(importance_df.set_index('Feature'))
+                else:
+                    st.info("Train models to see feature importance analysis.")
+            
+            # Model explanation
+            st.markdown("---")
+            st.subheader("🔍 How the ML Models Work")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("""
+                **🌳 Random Forest**
+                - **Purpose**: Baseline ensemble model
+                - **Strengths**: Robust, interpretable
+                - **Use Case**: Feature importance analysis
+                - **Input**: Tabular hotel features
+                """)
+            
+            with col2:
+                st.markdown("""
+                **🚀 LightGBM**
+                - **Purpose**: Advanced gradient boosting
+                - **Strengths**: High accuracy, fast training
+                - **Use Case**: Primary availability prediction
+                - **Input**: Engineered features
+                """)
+            
+            with col3:
+                st.markdown("""
+                **🔗 LSTM Neural Network**
+                - **Purpose**: Time series patterns
+                - **Strengths**: Temporal dependencies
+                - **Use Case**: Seasonal availability trends
+                - **Input**: 14-day sequences
+                """)
+            
             st.markdown("""
-            **🌳 Random Forest**
-            - **Purpose**: Baseline ensemble model
-            - **Strengths**: Robust, interpretable
-            - **Use Case**: Feature importance analysis
-            - **Input**: Tabular hotel features
+            ### 🎯 Prediction Target: Hotel Availability Score (0-1)
+            
+            The models predict a **real-time availability score** for each hotel:
+            - **1.0** = Fully available (high cancellation rates, low occupancy)
+            - **0.5** = Moderate availability 
+            - **0.0** = No availability (fully booked, low cancellations)
+            
+            **Key Features Used**:
+            - 📅 Temporal patterns (seasonality, day of week, holidays)
+            - 🏨 Hotel characteristics (location, pricing, capacity)
+            - 📊 Historical booking patterns (cancellations, lead times)
+            - 👥 Guest demographics (family size, stay duration)
+            - 💰 Pricing dynamics (ADR, revenue patterns)
             """)
-        
-        with col2:
-            st.markdown("""
-            **🚀 LightGBM**
-            - **Purpose**: Advanced gradient boosting
-            - **Strengths**: High accuracy, fast training
-            - **Use Case**: Primary availability prediction
-            - **Input**: Engineered features
-            """)
-        
-        with col3:
-            st.markdown("""
-            **🔗 LSTM Neural Network**
-            - **Purpose**: Time series patterns
-            - **Strengths**: Temporal dependencies
-            - **Use Case**: Seasonal availability trends
-            - **Input**: 14-day sequences
-            """)
-        
-        st.markdown("""
-        ### 🎯 Prediction Target: Hotel Availability Score (0-1)
-        
-        The models predict a **real-time availability score** for each hotel:
-        - **1.0** = Fully available (high cancellation rates, low occupancy)
-        - **0.5** = Moderate availability 
-        - **0.0** = No availability (fully booked, low cancellations)
-        
-        **Key Features Used**:
-        - 📅 Temporal patterns (seasonality, day of week, holidays)
-        - 🏨 Hotel characteristics (location, pricing, capacity)
-        - 📊 Historical booking patterns (cancellations, lead times)
-        - 👥 Guest demographics (family size, stay duration)
-        - 💰 Pricing dynamics (ADR, revenue patterns)
-        """)
 
 if __name__ == "__main__":
     main() 
