@@ -1,0 +1,10 @@
+# Basic requirements for Streamlit Cloud
+pandas>=1.5.0
+numpy>=1.21.0
+streamlit>=1.28.0
+
+# Basic visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# Note: For full ML capabilities, install requirements_ml.txt locally 
